@@ -1,0 +1,575 @@
+import { useState, useMemo, useCallback } from "react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  ReferenceLine,
+  Cell,
+} from "recharts";
+
+// ── Presets ──────────────────────────────────────────────────────────────────
+const PRESETS = {
+  median: {
+    label: "Median Estimates",
+    params: {
+      initialTrainingComputeLog: 26.5,
+      annualComputeGrowthPct: 45,
+      computeSlowdownYear: 2029,
+      computeSlowdownFactor: 2.0,
+      softwareEffGrowthPct: 35,
+      softwareProgressShare: 40,
+      ideasDifficulty: 3.5,
+      currentTimeHorizonHrs: 2,
+      acTimeHorizonHrs: 4380,
+      presentDoublingTimeMonths: 8,
+      doublingDifficulty: 1.15,
+      researchTasteSlope: 0.6,
+      researchTasteMultiplier: 3.0,
+      codingAutoEfficiency: 0.7,
+      experimentComputeBottleneck: 0.4,
+      jumpsAboveSarForAsi: 4,
+      unknownLimitationsAdj: 1.5,
+      dataBottleneckAdj: 1.2,
+    },
+  },
+  optimistic: {
+    label: "Optimistic / Short Timelines",
+    params: {
+      initialTrainingComputeLog: 26.5,
+      annualComputeGrowthPct: 55,
+      computeSlowdownYear: 2031,
+      computeSlowdownFactor: 1.5,
+      softwareEffGrowthPct: 50,
+      softwareProgressShare: 55,
+      ideasDifficulty: 2.5,
+      currentTimeHorizonHrs: 4,
+      acTimeHorizonHrs: 4380,
+      presentDoublingTimeMonths: 5,
+      doublingDifficulty: 1.05,
+      researchTasteSlope: 0.8,
+      researchTasteMultiplier: 4.0,
+      codingAutoEfficiency: 0.85,
+      experimentComputeBottleneck: 0.25,
+      jumpsAboveSarForAsi: 3,
+      unknownLimitationsAdj: 1.0,
+      dataBottleneckAdj: 1.0,
+    },
+  },
+  conservative: {
+    label: "Conservative / Long Timelines",
+    params: {
+      initialTrainingComputeLog: 26.5,
+      annualComputeGrowthPct: 35,
+      computeSlowdownYear: 2027,
+      computeSlowdownFactor: 3.0,
+      softwareEffGrowthPct: 20,
+      softwareProgressShare: 25,
+      ideasDifficulty: 5.0,
+      currentTimeHorizonHrs: 1,
+      acTimeHorizonHrs: 4380,
+      presentDoublingTimeMonths: 14,
+      doublingDifficulty: 1.35,
+      researchTasteSlope: 0.35,
+      researchTasteMultiplier: 2.0,
+      codingAutoEfficiency: 0.5,
+      experimentComputeBottleneck: 0.6,
+      jumpsAboveSarForAsi: 6,
+      unknownLimitationsAdj: 2.5,
+      dataBottleneckAdj: 2.0,
+    },
+  },
+};
+
+// ── Param metadata ───────────────────────────────────────────────────────────
+const PARAM_META = {
+  initialTrainingComputeLog: { label: "Initial Training Compute (log₁₀ FLOP, 2024)", min: 24, max: 29, step: 0.1, fmt: (v) => `10^${v.toFixed(1)}` },
+  annualComputeGrowthPct: { label: "Annual Training Compute Growth (%)", min: 10, max: 80, step: 1, fmt: (v) => `${v}%` },
+  computeSlowdownYear: { label: "Compute Scaling Slowdown Year", min: 2025, max: 2035, step: 1, fmt: (v) => `${v}` },
+  computeSlowdownFactor: { label: "Compute Scaling Slowdown Factor", min: 1.0, max: 5.0, step: 0.1, fmt: (v) => `${v.toFixed(1)}×` },
+  softwareEffGrowthPct: { label: "Software Efficiency Growth Rate (%/yr, 2024)", min: 5, max: 80, step: 1, fmt: (v) => `${v}%` },
+  softwareProgressShare: { label: "Software Progress Share (%)", min: 5, max: 80, step: 1, fmt: (v) => `${v}%` },
+  ideasDifficulty: { label: "Ideas Difficulty (diminishing returns)", min: 1, max: 8, step: 0.1, fmt: (v) => v.toFixed(1) },
+  currentTimeHorizonHrs: { label: "Current AI Time Horizon (hours, 2024)", min: 0.5, max: 24, step: 0.5, fmt: (v) => `${v}h` },
+  acTimeHorizonHrs: { label: "Automated Coder Time Horizon (hours)", min: 500, max: 10000, step: 100, fmt: (v) => `${(v / 24).toFixed(0)}d (${v}h)` },
+  presentDoublingTimeMonths: { label: "Present Doubling Time (months)", min: 2, max: 24, step: 1, fmt: (v) => `${v}mo` },
+  doublingDifficulty: { label: "Doubling Difficulty (superexponentiality)", min: 0.8, max: 2.0, step: 0.01, fmt: (v) => v.toFixed(2) },
+  researchTasteSlope: { label: "Automated Research Taste Slope", min: 0.1, max: 1.0, step: 0.05, fmt: (v) => v.toFixed(2) },
+  researchTasteMultiplier: { label: "Median-to-Top Research Taste Multiplier", min: 1.0, max: 6.0, step: 0.1, fmt: (v) => `${v.toFixed(1)}×` },
+  codingAutoEfficiency: { label: "Coding Automation Efficiency", min: 0.1, max: 1.0, step: 0.05, fmt: (v) => `${(v * 100).toFixed(0)}%` },
+  experimentComputeBottleneck: { label: "Experiment Compute Bottleneck", min: 0.05, max: 0.9, step: 0.05, fmt: (v) => v.toFixed(2) },
+  jumpsAboveSarForAsi: { label: "Jumps Above SAR Needed for ASI", min: 1, max: 10, step: 0.5, fmt: (v) => v.toFixed(1) },
+  unknownLimitationsAdj: { label: "Unknown Limitations Adjustment (×)", min: 0.5, max: 4.0, step: 0.1, fmt: (v) => `${v.toFixed(1)}×` },
+  dataBottleneckAdj: { label: "Data Bottleneck Adjustment (×)", min: 0.5, max: 4.0, step: 0.1, fmt: (v) => `${v.toFixed(1)}×` },
+};
+
+const SECTIONS = [
+  { title: "Compute Scaling", icon: "⚡", keys: ["initialTrainingComputeLog", "annualComputeGrowthPct", "computeSlowdownYear", "computeSlowdownFactor"] },
+  { title: "Software Efficiency", icon: "🧠", keys: ["softwareEffGrowthPct", "softwareProgressShare", "ideasDifficulty"] },
+  { title: "Time Horizon & AC", icon: "⏱", keys: ["currentTimeHorizonHrs", "acTimeHorizonHrs", "presentDoublingTimeMonths", "doublingDifficulty"] },
+  { title: "Automation & Takeoff", icon: "🚀", keys: ["researchTasteSlope", "researchTasteMultiplier", "codingAutoEfficiency", "experimentComputeBottleneck", "jumpsAboveSarForAsi"] },
+  { title: "Adjustments", icon: "🔧", keys: ["unknownLimitationsAdj", "dataBottleneckAdj"] },
+];
+
+// ── Simulation ───────────────────────────────────────────────────────────────
+function simulate(p) {
+  const startYear = 2024;
+  const endYear = 2065;
+  const stepsPerYear = 4;
+  const dt = 1 / stepsPerYear;
+
+  let trainingComputeLog = p.initialTrainingComputeLog;
+  let softwareEffLog = 0;
+  let timeHorizonHrs = p.currentTimeHorizonHrs;
+
+  let acReached = false;
+  let asiReached = false;
+  let acYear = null;
+  let asiYear = null;
+  let codingAutomationLevel = 0;
+  let researchTaste = 0;
+
+  const sarThreshold = 1.0;
+  const asiResearchTaste = sarThreshold + p.jumpsAboveSarForAsi * 0.25;
+
+  const data = [];
+
+  const baseSoftGrowth = p.softwareEffGrowthPct / 100;
+  const baseComputeGrowth = p.annualComputeGrowthPct / 100;
+  const acLogHrs = Math.log10(p.acTimeHorizonHrs);
+  const currentLogHrs = Math.log10(p.currentTimeHorizonHrs);
+
+  let prevEffectiveLog = trainingComputeLog + softwareEffLog;
+  let cumulDoublings = 0;
+
+  for (let yr = startYear; yr <= endYear; yr += dt) {
+    const year = Math.round(yr * stepsPerYear) / stepsPerYear;
+
+    // Training compute growth (with slowdown)
+    let computeGrowth = baseComputeGrowth;
+    if (year >= p.computeSlowdownYear) {
+      computeGrowth = baseComputeGrowth / p.computeSlowdownFactor;
+    }
+    trainingComputeLog += Math.log10(1 + computeGrowth) * dt;
+
+    // Software efficiency growth
+    let autoBoost = 0;
+    if (acReached) {
+      const codingContrib = codingAutomationLevel * p.codingAutoEfficiency;
+      const computeContrib = 1 - p.experimentComputeBottleneck * (1 - codingContrib);
+      const tasteContrib = researchTaste * p.researchTasteMultiplier;
+      autoBoost = (codingContrib * computeContrib + tasteContrib * 0.3) * (p.softwareProgressShare / 100);
+    }
+
+    const effectiveSoftGrowth = baseSoftGrowth * (1 + autoBoost) / Math.pow(1 + softwareEffLog * 0.1, 1 / p.ideasDifficulty);
+    softwareEffLog += Math.log10(1 + effectiveSoftGrowth) * dt;
+
+    const effectiveComputeLog = trainingComputeLog + softwareEffLog;
+
+    // Time horizon growth (semi-endogenous)
+    const logECDelta = effectiveComputeLog - prevEffectiveLog;
+    const doublingTimeYears = (p.presentDoublingTimeMonths / 12) * Math.pow(p.doublingDifficulty, cumulDoublings);
+    const horizonGrowthFactor = logECDelta / (doublingTimeYears > 0.01 ? doublingTimeYears : 0.01);
+    const logHrsGrowth = horizonGrowthFactor * 0.3 * (1 + autoBoost * 0.5);
+    const logHrs = Math.log10(timeHorizonHrs) + logHrsGrowth;
+    timeHorizonHrs = Math.pow(10, logHrs);
+    cumulDoublings += logHrsGrowth / Math.log10(2);
+
+    prevEffectiveLog = effectiveComputeLog;
+
+    // Check AC milestone
+    const adjustedACHrs = p.acTimeHorizonHrs * p.unknownLimitationsAdj * p.dataBottleneckAdj;
+    if (!acReached && timeHorizonHrs >= adjustedACHrs) {
+      acReached = true;
+      acYear = year;
+      codingAutomationLevel = 0.5;
+    }
+
+    // Post-AC: ramp up automation
+    if (acReached && !asiReached) {
+      codingAutomationLevel = Math.min(1.0, codingAutomationLevel + 0.15 * dt);
+      const effectiveLogSinceAC = effectiveComputeLog - (data.find((d) => d.acMarker)?.effectiveComputeLog || effectiveComputeLog);
+      researchTaste = Math.min(asiResearchTaste + 0.5, p.researchTasteSlope * Math.sqrt(Math.max(0, effectiveLogSinceAC * 2 + codingAutomationLevel * 3)));
+    }
+
+    // Check ASI milestone
+    if (acReached && !asiReached && researchTaste >= asiResearchTaste) {
+      asiReached = true;
+      asiYear = year;
+    }
+
+    if (Math.abs(year - Math.round(year * 2) / 2) < dt / 2) {
+      data.push({
+        year: parseFloat(year.toFixed(2)),
+        yearLabel: year.toFixed(1),
+        trainingComputeLog: parseFloat(trainingComputeLog.toFixed(2)),
+        softwareEffLog: parseFloat(softwareEffLog.toFixed(2)),
+        effectiveComputeLog: parseFloat(effectiveComputeLog.toFixed(2)),
+        timeHorizonHrs: parseFloat(timeHorizonHrs.toFixed(1)),
+        timeHorizonLogHrs: parseFloat(Math.log10(timeHorizonHrs).toFixed(3)),
+        codingAutomation: parseFloat((codingAutomationLevel * 100).toFixed(1)),
+        researchTaste: parseFloat(researchTaste.toFixed(3)),
+        acMarker: acReached && !data.some((d) => d.acMarker),
+        asiMarker: asiReached && !data.some((d) => d.asiMarker),
+      });
+    }
+  }
+
+  // Takeoff duration
+  const takeoffYears = acYear && asiYear ? asiYear - acYear : null;
+  const takeoffSpeed = takeoffYears === null ? "N/A" : takeoffYears < 1 ? "Fast (<1yr)" : takeoffYears < 4 ? "Moderate (1-4yr)" : "Slow (4yr+)";
+
+  return { data, acYear, asiYear, takeoffYears, takeoffSpeed };
+}
+
+// ── Sensitivity analysis ─────────────────────────────────────────────────────
+function computeSensitivity(baseParams) {
+  const baseResult = simulate(baseParams);
+  const baseAC = baseResult.acYear || 2060;
+  const sensData = [];
+
+  const perturbKeys = [
+    "annualComputeGrowthPct", "softwareEffGrowthPct", "softwareProgressShare",
+    "presentDoublingTimeMonths", "doublingDifficulty", "researchTasteSlope",
+    "codingAutoEfficiency", "experimentComputeBottleneck", "jumpsAboveSarForAsi",
+    "unknownLimitationsAdj", "ideasDifficulty",
+  ];
+
+  for (const key of perturbKeys) {
+    const meta = PARAM_META[key];
+    const base = baseParams[key];
+    const lo = base - (base - meta.min) * 0.4;
+    const hi = base + (meta.max - base) * 0.4;
+
+    const loResult = simulate({ ...baseParams, [key]: lo });
+    const hiResult = simulate({ ...baseParams, [key]: hi });
+
+    const loAC = (loResult.acYear || 2060) - baseAC;
+    const hiAC = (hiResult.acYear || 2060) - baseAC;
+
+    sensData.push({
+      param: meta.label.replace(/\(.*?\)/g, "").trim().slice(0, 30),
+      low: parseFloat(Math.min(loAC, hiAC).toFixed(1)),
+      high: parseFloat(Math.max(loAC, hiAC).toFixed(1)),
+      spread: parseFloat(Math.abs(hiAC - loAC).toFixed(1)),
+    });
+  }
+
+  return sensData.sort((a, b) => b.spread - a.spread).slice(0, 8);
+}
+
+// ── Components ───────────────────────────────────────────────────────────────
+function ParamSlider({ paramKey, value, onChange }) {
+  const meta = PARAM_META[paramKey];
+  return (
+    <div className="mb-3">
+      <div className="flex justify-between items-center mb-1">
+        <label className="text-xs text-gray-300 leading-tight pr-2">{meta.label}</label>
+        <span className="text-xs font-mono text-cyan-400 whitespace-nowrap">{meta.fmt(value)}</span>
+      </div>
+      <input
+        type="range"
+        min={meta.min}
+        max={meta.max}
+        step={meta.step}
+        value={value}
+        onChange={(e) => onChange(paramKey, parseFloat(e.target.value))}
+        className="w-full h-1.5 rounded-lg appearance-none cursor-pointer"
+        style={{
+          background: `linear-gradient(to right, #06b6d4 0%, #06b6d4 ${((value - meta.min) / (meta.max - meta.min)) * 100}%, #374151 ${((value - meta.min) / (meta.max - meta.min)) * 100}%, #374151 100%)`,
+        }}
+      />
+    </div>
+  );
+}
+
+function ResultCard({ label, value, sub, color }) {
+  return (
+    <div className="rounded-xl p-4" style={{ background: "rgba(15,23,42,0.7)", border: `1px solid ${color}33` }}>
+      <div className="text-xs text-gray-400 mb-1">{label}</div>
+      <div className="text-2xl font-bold" style={{ color }}>{value}</div>
+      {sub && <div className="text-xs text-gray-500 mt-1">{sub}</div>}
+    </div>
+  );
+}
+
+function CustomTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, padding: "8px 12px", fontSize: 12 }}>
+      <div className="text-gray-300 font-semibold mb-1">{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ color: p.color }} className="flex gap-2">
+          <span>{p.name}:</span>
+          <span className="font-mono">{typeof p.value === "number" ? p.value.toFixed(2) : p.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Main App ─────────────────────────────────────────────────────────────────
+export default function AIFuturesExplorer() {
+  const [params, setParams] = useState(PRESETS.median.params);
+  const [openSections, setOpenSections] = useState({ 0: true, 1: true, 2: true, 3: true, 4: true });
+  const [activeTab, setActiveTab] = useState("timeline");
+
+  const handleParam = useCallback((key, val) => {
+    setParams((prev) => ({ ...prev, [key]: val }));
+  }, []);
+
+  const toggleSection = (i) => setOpenSections((prev) => ({ ...prev, [i]: !prev[i] }));
+
+  const result = useMemo(() => simulate(params), [params]);
+  const sensitivity = useMemo(() => computeSensitivity(params), [params]);
+
+  const acYearStr = result.acYear ? result.acYear.toFixed(1) : ">2065";
+  const asiYearStr = result.asiYear ? result.asiYear.toFixed(1) : ">2065";
+  const takeoffStr = result.takeoffYears ? `${result.takeoffYears.toFixed(1)} years` : "N/A";
+
+  const tabs = [
+    { id: "timeline", label: "Effective Compute" },
+    { id: "horizon", label: "Time Horizon" },
+    { id: "automation", label: "Automation" },
+    { id: "sensitivity", label: "Sensitivity" },
+  ];
+
+  return (
+    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0c0f1a 0%, #111827 50%, #0c1220 100%)", color: "#e2e8f0", fontFamily: "'Inter', system-ui, sans-serif" }}>
+      {/* Header */}
+      <header style={{ borderBottom: "1px solid #1e293b", background: "rgba(15,23,42,0.8)", backdropFilter: "blur(12px)", position: "sticky", top: 0, zIndex: 50 }}>
+        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "12px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: "linear-gradient(135deg, #06b6d4, #8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>⚛</div>
+            <div>
+              <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0, background: "linear-gradient(to right, #06b6d4, #8b5cf6)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>AI Futures Model Explorer</h1>
+              <p style={{ fontSize: 11, color: "#64748b", margin: 0 }}>Interactive AI Timelines & Takeoff Simulator</p>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {Object.entries(PRESETS).map(([key, preset]) => (
+              <button
+                key={key}
+                onClick={() => setParams(preset.params)}
+                style={{
+                  padding: "6px 12px", borderRadius: 6, border: "1px solid #334155",
+                  background: JSON.stringify(params) === JSON.stringify(preset.params) ? "#1e293b" : "transparent",
+                  color: JSON.stringify(params) === JSON.stringify(preset.params) ? "#06b6d4" : "#94a3b8",
+                  fontSize: 11, cursor: "pointer", transition: "all 0.2s",
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      <div style={{ maxWidth: 1400, margin: "0 auto", padding: 24, display: "flex", gap: 24 }}>
+        {/* Sidebar */}
+        <aside style={{ width: 320, flexShrink: 0 }}>
+          <div style={{ position: "sticky", top: 80, maxHeight: "calc(100vh - 100px)", overflowY: "auto", paddingRight: 8 }}>
+            {SECTIONS.map((section, i) => (
+              <div key={i} style={{ marginBottom: 8, borderRadius: 12, border: "1px solid #1e293b", background: "rgba(15,23,42,0.5)", overflow: "hidden" }}>
+                <button
+                  onClick={() => toggleSection(i)}
+                  style={{
+                    width: "100%", padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between",
+                    background: "transparent", border: "none", color: "#e2e8f0", cursor: "pointer", fontSize: 13, fontWeight: 600,
+                  }}
+                >
+                  <span>{section.icon} {section.title}</span>
+                  <span style={{ transform: openSections[i] ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s", fontSize: 10 }}>▼</span>
+                </button>
+                {openSections[i] && (
+                  <div style={{ padding: "4px 14px 14px" }}>
+                    {section.keys.map((key) => (
+                      <ParamSlider key={key} paramKey={key} value={params[key]} onChange={handleParam} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </aside>
+
+        {/* Main */}
+        <main style={{ flex: 1, minWidth: 0 }}>
+          {/* Result Cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
+            <ResultCard label="Automated Coder (AC)" value={acYearStr} sub="Full coding automation" color="#06b6d4" />
+            <ResultCard label="Superintelligence (ASI)" value={asiYearStr} sub="Superhuman AI researcher" color="#8b5cf6" />
+            <ResultCard label="Takeoff Duration" value={takeoffStr} sub={result.takeoffSpeed} color={result.takeoffYears && result.takeoffYears < 1 ? "#ef4444" : result.takeoffYears && result.takeoffYears < 4 ? "#f59e0b" : "#22c55e"} />
+            <ResultCard
+              label="P(Fast Takeoff)"
+              value={result.takeoffYears ? `${Math.max(0, Math.min(100, Math.round(100 * Math.exp(-result.takeoffYears * 0.8)))).toFixed(0)}%` : "—"}
+              sub="< 1 year AC → ASI"
+              color="#f43f5e"
+            />
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid #1e293b", paddingBottom: 2 }}>
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                style={{
+                  padding: "8px 16px", borderRadius: "8px 8px 0 0", border: "none",
+                  background: activeTab === tab.id ? "#1e293b" : "transparent",
+                  color: activeTab === tab.id ? "#06b6d4" : "#64748b",
+                  fontSize: 13, fontWeight: 500, cursor: "pointer", transition: "all 0.2s",
+                  borderBottom: activeTab === tab.id ? "2px solid #06b6d4" : "2px solid transparent",
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Charts */}
+          <div style={{ background: "rgba(15,23,42,0.5)", borderRadius: 16, border: "1px solid #1e293b", padding: 24 }}>
+            {activeTab === "timeline" && (
+              <div>
+                <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4, marginTop: 0 }}>Effective Compute Over Time</h3>
+                <p style={{ fontSize: 12, color: "#64748b", marginBottom: 16, marginTop: 0 }}>
+                  Log₁₀ FLOP — Training compute × software efficiency
+                </p>
+                <ResponsiveContainer width="100%" height={420}>
+                  <AreaChart data={result.data} margin={{ top: 10, right: 30, left: 10, bottom: 10 }}>
+                    <defs>
+                      <linearGradient id="ecGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#06b6d4" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="tcGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.2} />
+                        <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <XAxis dataKey="year" stroke="#475569" tick={{ fontSize: 11, fill: "#64748b" }} />
+                    <YAxis stroke="#475569" tick={{ fontSize: 11, fill: "#64748b" }} label={{ value: "log₁₀ FLOP", angle: -90, position: "insideLeft", style: { fill: "#64748b", fontSize: 11 } }} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 12, color: "#94a3b8" }} />
+                    {result.acYear && <ReferenceLine x={parseFloat(result.acYear.toFixed(1))} stroke="#06b6d4" strokeDasharray="5 5" label={{ value: "AC", position: "top", fill: "#06b6d4", fontSize: 11 }} />}
+                    {result.asiYear && <ReferenceLine x={parseFloat(result.asiYear.toFixed(1))} stroke="#8b5cf6" strokeDasharray="5 5" label={{ value: "ASI", position: "top", fill: "#8b5cf6", fontSize: 11 }} />}
+                    <Area type="monotone" dataKey="effectiveComputeLog" name="Effective Compute" stroke="#06b6d4" fill="url(#ecGrad)" strokeWidth={2.5} dot={false} />
+                    <Area type="monotone" dataKey="trainingComputeLog" name="Training Compute" stroke="#8b5cf6" fill="url(#tcGrad)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} />
+                    <Area type="monotone" dataKey="softwareEffLog" name="Software Eff. (log)" stroke="#22c55e" fill="none" strokeWidth={1.5} strokeDasharray="2 2" dot={false} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {activeTab === "horizon" && (
+              <div>
+                <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4, marginTop: 0 }}>AI Time Horizon</h3>
+                <p style={{ fontSize: 12, color: "#64748b", marginBottom: 16, marginTop: 0 }}>
+                  Duration of tasks AI can reliably complete (log scale, hours)
+                </p>
+                <ResponsiveContainer width="100%" height={420}>
+                  <AreaChart data={result.data} margin={{ top: 10, right: 30, left: 10, bottom: 10 }}>
+                    <defs>
+                      <linearGradient id="thGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <XAxis dataKey="year" stroke="#475569" tick={{ fontSize: 11, fill: "#64748b" }} />
+                    <YAxis stroke="#475569" tick={{ fontSize: 11, fill: "#64748b" }} label={{ value: "log₁₀(hours)", angle: -90, position: "insideLeft", style: { fill: "#64748b", fontSize: 11 } }} />
+                    <Tooltip content={<CustomTooltip />} />
+                    {result.acYear && <ReferenceLine x={parseFloat(result.acYear.toFixed(1))} stroke="#06b6d4" strokeDasharray="5 5" label={{ value: "AC", position: "top", fill: "#06b6d4", fontSize: 11 }} />}
+                    <ReferenceLine y={Math.log10(params.acTimeHorizonHrs * params.unknownLimitationsAdj * params.dataBottleneckAdj)} stroke="#ef4444" strokeDasharray="3 3" label={{ value: "AC Threshold", position: "right", fill: "#ef4444", fontSize: 10 }} />
+                    <Area type="monotone" dataKey="timeHorizonLogHrs" name="Time Horizon (log₁₀ hrs)" stroke="#f59e0b" fill="url(#thGrad)" strokeWidth={2.5} dot={false} />
+                  </AreaChart>
+                </ResponsiveContainer>
+                <div style={{ display: "flex", gap: 24, marginTop: 16, fontSize: 12, color: "#94a3b8" }}>
+                  <span>1h = simple task</span>
+                  <span>24h = day-long project</span>
+                  <span>720h (30d) = month-long project</span>
+                  <span>4,380h (6mo) = Automated Coder default</span>
+                </div>
+              </div>
+            )}
+
+            {activeTab === "automation" && (
+              <div>
+                <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4, marginTop: 0 }}>Automation & Research Taste</h3>
+                <p style={{ fontSize: 12, color: "#64748b", marginBottom: 16, marginTop: 0 }}>
+                  Coding automation level and AI research capability post-AC
+                </p>
+                <ResponsiveContainer width="100%" height={420}>
+                  <LineChart data={result.data} margin={{ top: 10, right: 30, left: 10, bottom: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <XAxis dataKey="year" stroke="#475569" tick={{ fontSize: 11, fill: "#64748b" }} />
+                    <YAxis yAxisId="left" stroke="#475569" tick={{ fontSize: 11, fill: "#64748b" }} domain={[0, 100]} label={{ value: "Automation %", angle: -90, position: "insideLeft", style: { fill: "#64748b", fontSize: 11 } }} />
+                    <YAxis yAxisId="right" orientation="right" stroke="#475569" tick={{ fontSize: 11, fill: "#64748b" }} label={{ value: "Research Taste", angle: 90, position: "insideRight", style: { fill: "#64748b", fontSize: 11 } }} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 12, color: "#94a3b8" }} />
+                    {result.acYear && <ReferenceLine x={parseFloat(result.acYear.toFixed(1))} stroke="#06b6d4" strokeDasharray="5 5" label={{ value: "AC", position: "top", fill: "#06b6d4", fontSize: 11 }} />}
+                    {result.asiYear && <ReferenceLine x={parseFloat(result.asiYear.toFixed(1))} stroke="#8b5cf6" strokeDasharray="5 5" label={{ value: "ASI", position: "top", fill: "#8b5cf6", fontSize: 11 }} />}
+                    <Line yAxisId="left" type="monotone" dataKey="codingAutomation" name="Coding Automation %" stroke="#06b6d4" strokeWidth={2} dot={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="researchTaste" name="Research Taste" stroke="#f43f5e" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {activeTab === "sensitivity" && (
+              <div>
+                <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 4, marginTop: 0 }}>Parameter Sensitivity Analysis</h3>
+                <p style={{ fontSize: 12, color: "#64748b", marginBottom: 16, marginTop: 0 }}>
+                  Impact on AC timeline when each parameter is varied (years shift from baseline)
+                </p>
+                <ResponsiveContainer width="100%" height={420}>
+                  <BarChart data={sensitivity} layout="vertical" margin={{ top: 10, right: 30, left: 140, bottom: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <XAxis type="number" stroke="#475569" tick={{ fontSize: 11, fill: "#64748b" }} label={{ value: "Years shift in AC", position: "bottom", style: { fill: "#64748b", fontSize: 11 } }} />
+                    <YAxis type="category" dataKey="param" stroke="#475569" tick={{ fontSize: 10, fill: "#94a3b8" }} width={130} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <ReferenceLine x={0} stroke="#475569" />
+                    <Bar dataKey="low" name="10th pctl" stackId="a" fill="#06b6d4" radius={[4, 0, 0, 4]} />
+                    <Bar dataKey="high" name="90th pctl" stackId="b" fill="#f43f5e" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+
+          {/* Model description */}
+          <div style={{ marginTop: 24, background: "rgba(15,23,42,0.5)", borderRadius: 16, border: "1px solid #1e293b", padding: 24 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, marginTop: 0 }}>About This Model</h3>
+            <div style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.7 }}>
+              <p style={{ margin: "0 0 10px" }}>
+                This is an interactive explorer inspired by the <strong style={{ color: "#e2e8f0" }}>AI Futures Timelines & Takeoff Model</strong>. It simulates
+                the trajectory from current AI capabilities to two key milestones: <strong style={{ color: "#06b6d4" }}>Automated Coder (AC)</strong> — when AI
+                can reliably complete ~6-month coding projects — and <strong style={{ color: "#8b5cf6" }}>Artificial Superintelligence (ASI)</strong> — when AI
+                research capability surpasses all humans.
+              </p>
+              <p style={{ margin: "0 0 10px" }}>
+                The core mechanism: <em>effective compute</em> (training compute × software efficiency) drives growth in AI's <em>time horizon</em> — the
+                duration of tasks it can handle. Once the time horizon crosses the AC threshold, a feedback loop begins: automated coding accelerates software R&D,
+                which increases effective compute, which further extends capabilities. The speed of this feedback loop determines <em>takeoff speed</em>.
+              </p>
+              <p style={{ margin: 0 }}>
+                Key dynamics include diminishing returns to ideas (controlled by ideas difficulty), compute bottlenecks limiting how much coding automation helps,
+                and research taste — the quality of AI-generated research ideas — which must reach a threshold for ASI. Adjust the parameters on the left to
+                explore different scenarios. Based on the work of Eli Lifland, Daniel Kokotajlo, and collaborators.
+              </p>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
